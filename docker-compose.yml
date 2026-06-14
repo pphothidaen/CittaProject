@@ -1,0 +1,180 @@
+# Citta - Zero-Waste Agentic AI Platform
+# Quick Start:
+#   1. cp .env.example .env
+#   2. docker compose up -d
+#   3. Open http://localhost:8002/docs
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  # ─── Infrastructure ───
+  nats:
+    image: nats:2.10-alpine
+    container_name: citta-nats
+    ports:
+      - "${NATS_CLIENT_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    command: "-js -m 8222"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8222/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks: [citta-net]
+
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    container_name: citta-chromadb
+    volumes:
+      - chroma_data:/chroma/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/heartbeat', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      nats: { condition: service_healthy }
+    networks: [citta-net]
+
+  openvino_ovms:
+    image: openvino/model_server:latest
+    container_name: citta-ovms
+    restart: unless-stopped
+    volumes:
+      - ovms_models:/models
+    command:
+      - --rest_port=8000
+      - --model_repository_path=/models
+      - --model_name=OpenVINO/DeepSeek-R1-Distill-Qwen-1.5B-int4-ov
+      - --source_model=OpenVINO/DeepSeek-R1-Distill-Qwen-1.5B-int4-ov
+      - --task=text_generation
+      - --target_device=CPU
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [citta-net]
+
+  # ─── Citta Services (pre-built images from GHCR) ───
+  kernel:
+    image: ghcr.io/pphothidaen/citta-core/kernel:${CITTA_VERSION:-latest}
+    container_name: citta-kernel
+    logging: *default-logging
+    restart: unless-stopped
+    ports:
+      - "${KERNEL_PORT:-8002}:8002"
+    env_file: ./.env
+    environment:
+      NATS_URL: nats://nats:4222
+      CITTA_DEFAULT_PROVIDER: ${CITTA_DEFAULT_PROVIDER:-openvino_ovms}
+      CITTA_DEFAULT_MODEL: ${CITTA_DEFAULT_MODEL:-OpenVINO/DeepSeek-R1-Distill-Qwen-1.5B-int4-ov}
+      CITTA_ROUTE_POLICY_PROFILE: ${CITTA_ROUTE_POLICY_PROFILE:-latency_budgeted_cpu}
+      CITTA_EXTERNAL_FIRST: ${CITTA_EXTERNAL_FIRST:-0}
+      CACHE_LOOKUP_TIMEOUT_SECONDS: 5
+      INFERENCE_REQUEST_TIMEOUT_SECONDS: 120
+    depends_on:
+      nats: { condition: service_healthy }
+      memory_fabric: { condition: service_started }
+      inference_mesh: { condition: service_started }
+    volumes:
+      - citta_data:/data/citta
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [citta-net]
+
+  memory_fabric:
+    image: ghcr.io/pphothidaen/citta-core/memory_fabric:${CITTA_VERSION:-latest}
+    container_name: citta-memory-fabric
+    logging: *default-logging
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      NATS_URL: nats://nats:4222
+      CHROMA_DB_PATH: /chroma_data
+      ARTIFACTS_STORAGE_PATH: /artifacts
+    volumes:
+      - chroma_data:/chroma_data
+      - artifacts_storage:/artifacts
+    depends_on:
+      nats: { condition: service_healthy }
+      chromadb: { condition: service_healthy }
+    networks: [citta-net]
+
+  inference_mesh:
+    image: ghcr.io/pphothidaen/citta-core/inference_mesh:${CITTA_VERSION:-latest}
+    container_name: citta-inference-mesh
+    logging: *default-logging
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      NATS_URL: nats://nats:4222
+      OPENVINO_OVMS_BASE_URL: http://openvino_ovms:8000/v3
+      OPENVINO_OVMS_MODEL: ${OPENVINO_OVMS_MODEL:-OpenVINO/DeepSeek-R1-Distill-Qwen-1.5B-int4-ov}
+      CITTA_ROUTE_POLICY_PROFILE: ${CITTA_ROUTE_POLICY_PROFILE:-latency_budgeted_cpu}
+    volumes:
+      - citta_data:/data/citta
+    depends_on:
+      nats: { condition: service_healthy }
+      openvino_ovms: { condition: service_started }
+    networks: [citta-net]
+
+  governance:
+    image: ghcr.io/pphothidaen/citta-core/governance:${CITTA_VERSION:-latest}
+    container_name: citta-governance
+    logging: *default-logging
+    restart: unless-stopped
+    ports:
+      - "${GOVERNANCE_PORT:-8004}:8004"
+    env_file: ./.env
+    environment:
+      NATS_URL: nats://nats:4222
+      GOVERNANCE_RESULTS_DIR: /data/citta/governance_results
+      CITTA_PROMOTION_REGISTRY_FILE: /data/citta/promotion_registry.json
+    volumes:
+      - citta_data:/data/citta
+    depends_on:
+      nats: { condition: service_healthy }
+      inference_mesh: { condition: service_started }
+    networks: [citta-net]
+
+  learning_factory:
+    image: ghcr.io/pphothidaen/citta-core/learning_factory:${CITTA_VERSION:-latest}
+    container_name: citta-learning-factory
+    logging: *default-logging
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      NATS_URL: nats://nats:4222
+      CITTA_PROMOTION_REGISTRY_FILE: /data/citta/promotion_registry.json
+    volumes:
+      - citta_data:/data/citta
+      - artifacts_storage:/artifacts
+    depends_on:
+      nats: { condition: service_healthy }
+      memory_fabric: { condition: service_started }
+      inference_mesh: { condition: service_started }
+      governance: { condition: service_started }
+    networks: [citta-net]
+
+volumes:
+  chroma_data:
+  artifacts_storage:
+  ovms_models:
+  citta_data:
+
+networks:
+  citta-net:
+    driver: bridge
