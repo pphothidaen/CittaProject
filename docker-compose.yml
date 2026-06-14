@@ -67,7 +67,7 @@ services:
 
   # ─── Citta Services (pre-built images from GHCR) ───
   kernel:
-    image: ghcr.io/pphothidaen/citta-core/kernel:${CITTA_VERSION:-latest}
+    image: pphothidaen/citta-core-kernel:${CITTA_VERSION:-latest}
     container_name: citta-kernel
     logging: *default-logging
     restart: unless-stopped
@@ -96,7 +96,7 @@ services:
     networks: [citta-net]
 
   memory_fabric:
-    image: ghcr.io/pphothidaen/citta-core/memory_fabric:${CITTA_VERSION:-latest}
+    image: pphothidaen/citta-core-memory_fabric:${CITTA_VERSION:-latest}
     container_name: citta-memory-fabric
     logging: *default-logging
     restart: unless-stopped
@@ -114,7 +114,7 @@ services:
     networks: [citta-net]
 
   inference_mesh:
-    image: ghcr.io/pphothidaen/citta-core/inference_mesh:${CITTA_VERSION:-latest}
+    image: pphothidaen/citta-core-inference_mesh:${CITTA_VERSION:-latest}
     container_name: citta-inference-mesh
     logging: *default-logging
     restart: unless-stopped
@@ -132,7 +132,7 @@ services:
     networks: [citta-net]
 
   governance:
-    image: ghcr.io/pphothidaen/citta-core/governance:${CITTA_VERSION:-latest}
+    image: pphothidaen/citta-core-governance:${CITTA_VERSION:-latest}
     container_name: citta-governance
     logging: *default-logging
     restart: unless-stopped
@@ -151,7 +151,7 @@ services:
     networks: [citta-net]
 
   learning_factory:
-    image: ghcr.io/pphothidaen/citta-core/learning_factory:${CITTA_VERSION:-latest}
+    image: pphothidaen/citta-core-learning_factory:${CITTA_VERSION:-latest}
     container_name: citta-learning-factory
     logging: *default-logging
     restart: unless-stopped
